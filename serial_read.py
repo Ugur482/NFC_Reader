@@ -62,23 +62,31 @@ conn = sqlite3.connect(DB_FILE)
 known_uids = load_uid_data(conn)
 
 # --- Main loop ---------------------------------------------------------------
-# Reads firmware output line by line. Only lines matching "UID value:"
-# (printed by the ESP8266 after a successful PN532 read) are processed;
-# everything else is echoed to stdout for debugging.
+# Reads firmware output line by line. Lines matching "UID value:" (a card
+# read) or "TOKEN value:" (a phone answering our HCE AID) are processed the
+# same way; everything else is echoed to stdout for debugging.
+
+IDENTIFIER_PREFIXES = {
+    "UID value:": "UID",
+    "TOKEN value:": "TOKEN",
+}
 
 while True:
     line = ser.readline().decode("utf-8", errors="ignore").strip()
     if line:
         print(repr(line))
-    if line.startswith("UID value:"):
-        hex_bytes = line[len("UID value:"):].strip().split()
+    for prefix, scan_type in IDENTIFIER_PREFIXES.items():
+        if not line.startswith(prefix):
+            continue
+        hex_bytes = line[len(prefix):].strip().split()
         uid = ":".join(b[2:].upper() for b in hex_bytes if b.startswith("0x"))
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         result = is_uid_known(uid, known_uids)
         conn.execute(
-            "INSERT INTO scans (timestamp, uid, known) VALUES (?, ?, ?)",
-            (timestamp, uid, result),
+            "INSERT INTO scans (timestamp, uid, type, known) VALUES (?, ?, ?, ?)",
+            (timestamp, uid, scan_type, result),
         )
         conn.commit()
         ser.write(f"{result}\n".encode("utf-8"))
-        print("Known UID" if result else "Unknown UID")
+        print(f"Known {scan_type}" if result else f"Unknown {scan_type}")
+        break

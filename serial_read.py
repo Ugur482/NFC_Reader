@@ -5,13 +5,16 @@ Bridges the ESP8266/PN532 firmware to the access-control backend over
 a serial connection during prototyping.
 
 Listens on a serial port for "UID value:" lines printed by the firmware,
-parses the UID, checks it against a local whitelist file, logs the scan
-with a timestamp, and writes the access decision (0/1) back to the
-firmware over the same serial connection so it can drive the LEDs.
+parses the UID, checks it against a whitelist stored in SQLite, logs the
+scan with a timestamp to the same database, and writes the access
+decision (0/1) back to the firmware over the same serial connection so
+it can drive the LEDs.
 
 This is a stand-in for the real Flask/SQLite backend query — useful for
 bench-testing the firmware's read/decision/LED loop without a live
 server. See NFC_Reader_Design_Document.pdf for the target architecture.
+
+Run init_db.py once beforehand to create the database and tables.
 
 Hardware: ESP8266 NodeMCU + PN532 (SPI), connected via USB serial.
 
@@ -22,21 +25,21 @@ Author: Can
 Date: 2026-07
 """
 
+import sqlite3
 import time
 from datetime import datetime
 
 import serial
 
-PORT = "COM5"                           # Windows COM port for the NodeMCU's USB-serial adapter
-BAUD_RATE = 115200                      # Must match Serial.begin() in the firmware
-OUTPUT_FILE = "uid_log.txt"             # Append-only scan history: timestamp + UID
-ACCEPTED_UIDS_FILE = "accepted_UIDs.txt"    # Whitelist, one UID per line (format: "AA:BB:CC:DD")
+PORT = "COM5"                            # Windows COM port for the NodeMCU's USB-serial adapter
+BAUD_RATE = 115200                       # Must match Serial.begin() in the firmware
+DB_FILE = "nfc_access.db"                # SQLite DB holding the whitelist and scan log
 
 
-def load_uid_data(filepath):
-    """Load known UIDs (one per line) from filepath into a set of UIDs."""
-    with open(filepath, "r", encoding="utf-8") as f:
-        return {line.strip().upper() for line in f if line.strip()}
+def load_uid_data(conn):
+    """Load known UIDs from the whitelist table into a set of UIDs."""
+    rows = conn.execute("SELECT uid FROM whitelist").fetchall()
+    return {row[0].upper() for row in rows}
 
 
 def is_uid_known(uid, known_uids):
@@ -55,24 +58,27 @@ ser.setRTS(False)
 time.sleep(1)                           # give the port time to settle before flushing
 ser.reset_input_buffer()                # discard any stale bytes buffered before we were ready
 
-known_uids = load_uid_data(ACCEPTED_UIDS_FILE)
+conn = sqlite3.connect(DB_FILE)
+known_uids = load_uid_data(conn)
 
 # --- Main loop ---------------------------------------------------------------
 # Reads firmware output line by line. Only lines matching "UID value:"
 # (printed by the ESP8266 after a successful PN532 read) are processed;
 # everything else is echoed to stdout for debugging.
 
-with open(OUTPUT_FILE, "a", encoding="utf-8") as f:
-    while True:
-        line = ser.readline().decode("utf-8", errors="ignore").strip()
-        if line:
-            print(repr(line))
-        if line.startswith("UID value:"):
-            hex_bytes = line[len("UID value:"):].strip().split()
-            uid = ":".join(b[2:].upper() for b in hex_bytes if b.startswith("0x"))
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            f.write(f"{timestamp}\t{uid}\n")
-            f.flush()
-            result = is_uid_known(uid, known_uids)
-            ser.write(f"{result}\n".encode("utf-8"))
-            print("Known UID" if result else "Unknown UID")
+while True:
+    line = ser.readline().decode("utf-8", errors="ignore").strip()
+    if line:
+        print(repr(line))
+    if line.startswith("UID value:"):
+        hex_bytes = line[len("UID value:"):].strip().split()
+        uid = ":".join(b[2:].upper() for b in hex_bytes if b.startswith("0x"))
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        result = is_uid_known(uid, known_uids)
+        conn.execute(
+            "INSERT INTO scans (timestamp, uid, known) VALUES (?, ?, ?)",
+            (timestamp, uid, result),
+        )
+        conn.commit()
+        ser.write(f"{result}\n".encode("utf-8"))
+        print("Known UID" if result else "Unknown UID")

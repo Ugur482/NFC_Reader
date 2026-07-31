@@ -151,4 +151,4 @@ Android HCE lets an app emulate a card the reader reads through the exact same p
 
 ## License
 
-Released under the MIT License — see [`LICENSE`](LICENSE). Swap in whichever license you prefer.
+Released under the MIT License — see [`LICENSE`](LICENSE).

@@ -1,5 +1,7 @@
 # RFID / NFC Access Control System
 
+📄 See the [design document](docs/DESIGN.md)
+
 A card- and smartphone-based physical access control system built around a **PN532** NFC reader and an **ESP8266** microcontroller. Users authenticate with either a physical NFC card or an Android phone emulating a card over **Host Card Emulation (HCE)**. The reader forwards the credential to a **Flask + SQLite** backend, which owns the user list, makes the grant/deny decision, and logs every access event.
 
 <p>

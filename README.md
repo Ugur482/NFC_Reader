@@ -146,9 +146,3 @@ Java (`com.example.nfcidcard`), built on `HostApduService`, registering AID `F00
 | iOS | CardSession (17.4+) / BLE | ⏳ Deferred — needs entitlements; EEA restrictions |
 
 Android HCE lets an app emulate a card the reader reads through the exact same path as a physical card. iOS has no equivalent open API: CardSession needs organizational entitlements and carries EEA restrictions, and BLE is a weaker fallback (cold connections ~1–3 s vs. ~100–500 ms for an NFC tap). The credential-agnostic schema is what lets an iOS path be added later without touching the reader-to-server protocol.
-
----
-
-## License
-
-Released under the MIT License — see [`LICENSE`](LICENSE).

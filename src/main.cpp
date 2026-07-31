@@ -40,7 +40,7 @@ uint8_t SELECT_APDU[] = {
 int accessDecision = 0;
 
 void actOnDecision(int decision);
-bool selectHceApplet(uint8_t *token, uint8_t *tokenLen);
+int selectHceApplet(uint8_t *token, uint8_t *tokenLen);
 void printHex(const char *label, const uint8_t *data, uint8_t len);
 void waitForTargetRemoval();
 
@@ -71,12 +71,12 @@ void setup() {
 }
 
 void loop() {
-   uint8_t uid[7] = {0};
+  uint8_t uid[7] = {0};
   uint8_t uidLength = 0;
 
-  // Activate one ISO14443A target and read its UID. Blocks until a card or
-  // phone is presented. The target stays activated afterwards, so we can
-  // immediately try an APDU exchange on it.
+  // Step 1: read the UID. This works for a plain card, and for a phone it
+  // returns a random UID. But it does NOT set the library's _inListedTag,
+  // so an APDU exchange can't follow yet.
   bool success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength);
   if (!success) {
     return;
@@ -84,17 +84,26 @@ void loop() {
 
   uint8_t token[64];
   uint8_t tokenLen = 0;
+  int result = 0;   // default: treat as ordinary card (use UID)
 
-  if (selectHceApplet(token, &tokenLen)) {
-    // Phone running our HCE app: use the applet's token as the identifier.
-    printHex("TOKEN value:", token, tokenLen);
-  } else {
-    // Ordinary card (or a phone that didn't answer our AID): use the UID.
-    printHex("UID value:", uid, uidLength);
+  // Step 2: establish an APDU session. inListPassiveTarget() re-activates the
+  // target AND sets _inListedTag, which inDataExchange needs. For an HCE phone
+  // this also performs RATS (ISO-DEP). For a plain card it lists fine but the
+  // SELECT below simply fails, so we fall back to the UID.
+  if (nfc.inListPassiveTarget()) {
+    result = selectHceApplet(token, &tokenLen);
   }
 
-  // Live-query step: the host on Serial replies with the access decision.
-  // TODO: replace with a direct query to the Flask/SQLite backend.
+  if (result == 1) {
+    printHex("TOKEN value:", token, tokenLen);       // phone: use token
+  } else if (result == 2) {
+    Serial.println("Phone detected but not armed (press Show ID Card)");
+    waitForTargetRemoval();
+    return;
+  } else {
+    printHex("UID value:", uid, uidLength);           // card: use UID
+  }
+
   accessDecision = Serial.readString().toInt();
   actOnDecision(accessDecision);
 
@@ -110,28 +119,37 @@ void loop() {
  * On success the response is <token bytes> + SW1 SW2 (0x90 0x00). We strip
  * the trailing status word and hand back only the identifier payload.
  */
-bool selectHceApplet(uint8_t *token, uint8_t *tokenLen) {
+
+int selectHceApplet(uint8_t *token, uint8_t *tokenLen) {
   uint8_t response[64];
   uint8_t responseLength = sizeof(response);
 
   bool ok = nfc.inDataExchange(SELECT_APDU, sizeof(SELECT_APDU),
                                response, &responseLength);
-  if (!ok || responseLength < 2) {
-    return false;                 // no APDU channel -> not our HCE app (likely a card)
+
+  Serial.print("DBG inDataExchange ok=");
+  Serial.print(ok ? "true" : "false");
+  Serial.print(" len=");
+  Serial.println(responseLength);
+  if (ok) {
+    Serial.print("DBG raw:");
+    for (uint8_t i = 0; i < responseLength; i++) {
+      Serial.print(" 0x");
+      if (response[i] < 0x10) Serial.print("0");
+      Serial.print(response[i], HEX);
+    }
+    Serial.println();
   }
 
-  // Require a trailing 0x90 0x00 status word.
+  if (!ok || responseLength < 2) return 0;
   if (response[responseLength - 2] != 0x90 ||
-      response[responseLength - 1] != 0x00) {
-    return false;
-  }
+      response[responseLength - 1] != 0x00) return 2;
 
-  *tokenLen = responseLength - 2;  // drop SW1 SW2
-  for (uint8_t i = 0; i < *tokenLen; i++) {
-    token[i] = response[i];
-  }
-  return true;
+  *tokenLen = responseLength - 2;
+  for (uint8_t i = 0; i < *tokenLen; i++) token[i] = response[i];
+  return 1;
 }
+
 
 /**
  * @brief Print an identifier as space-separated "0xNN" bytes on one line.

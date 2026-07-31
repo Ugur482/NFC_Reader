@@ -410,6 +410,8 @@ bool PN532::readPassiveTargetID(uint8_t cardbaudrate, uint8_t *uid, uint8_t *uid
     if (pn532_packetbuffer[0] != 1)
         return 0;
 
+    inListedTag = pn532_packetbuffer[1];
+
     uint16_t sens_res = pn532_packetbuffer[2];
     sens_res <<= 8;
     sens_res |= pn532_packetbuffer[3];
